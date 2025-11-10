@@ -1,0 +1,58 @@
+name: Daily Shopify Price Log
+
+on:
+  schedule:
+    - cron: "10 1 * * *"   # runs daily at 01:10 UTC
+  workflow_dispatch:        # allow manual runs
+
+permissions:
+  contents: write           # needed to push the snapshots folder
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      SHOP_DOMAIN: ${{ secrets.SHOP_DOMAIN }}
+      SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # keep history so pushes work
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Ensure snapshots dir
+        run: mkdir -p snapshots
+
+      - name: Run daily price log
+        run: python3 daily_price_log.py
+
+      - name: Commit snapshots
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Commit if the snapshots folder has changes
+          if [ -n "$(git status --porcelain snapshots)" ]; then
+            git add -A snapshots
+            git commit -m "Add snapshot $(date -u +'%Y-%m-%d %H:%M:%S')" || echo "Nothing to commit"
+
+            # Try push; if remote is ahead, rebase and push again
+            git push origin HEAD:main || (
+              git fetch origin main
+              git pull --rebase origin main
+              git push origin HEAD:main
+            )
+          else
+            echo "No snapshot changes to commit."
+          fi
